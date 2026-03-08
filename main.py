@@ -205,13 +205,29 @@ async def speech_to_text(file: UploadFile = File(...)):
 
         # 3. Tích hợp model PhoWhisper tại đây
         result = stt_pipeline(temp_file_path)
-        generated_text = result["text"]
+        raw_text = result["text"]
 
         # 4. Xóa file tạm sau khi xử lý xong
         os.remove(temp_file_path)
 
-        # Trả về response đúng định dạng
-        return {"data": generated_text}
+        # 5. Sửa lỗi chính tả bằng LLM
+        correction_response = await client.chat.completions.create(
+            model=AI_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Bạn là công cụ sửa lỗi chính tả cho kết quả nhận dạng giọng nói tiếng Việt. "
+                               "Sửa lỗi chính tả, dấu thanh, và ngữ pháp. Chỉ sửa lỗi, không thay đổi ý nghĩa. "
+                               "Chỉ trả về văn bản đã sửa, không giải thích."
+                },
+                {"role": "user", "content": raw_text}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+        corrected_text = correction_response.choices[0].message.content.strip()
+
+        return {"raw": raw_text, "data": corrected_text}
 
     except Exception as e:
         # Nhớ xóa file tạm nếu có lỗi xảy ra

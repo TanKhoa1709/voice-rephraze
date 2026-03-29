@@ -20,6 +20,9 @@ client = AsyncOpenAI(
 AI_MODEL = "gpt-4o-mini"
 DB_NAME = "styles.db"  # Tên file database sẽ được tạo ra
 
+# Khởi tạo PhoWhisper cho Speech-to-Text
+stt_pipeline = pipeline("automatic-speech-recognition", model="vinai/PhoWhisper-large")
+
 app = FastAPI(title="AI Copywriting Service")
 
 
@@ -140,20 +143,43 @@ async def generate_description(request: GenRequest):
         style_context = row[0]  # Lấy cột description
 
     # 2. Tạo Prompt
+    system_prompt = """Bạn là một chuyên gia Copywriter thương mại điện tử hàng đầu, chuyên tạo ra các mô tả sản phẩm hấp dẫn, thuyết phục và tối ưu chuyển đổi.
+
+Nhiệm vụ của bạn:
+- Nhận đầu vào là một đoạn **giọng nói được chuyển thành văn bản** (speech-to-text). Đoạn văn bản này có thể lộn xộn, lặp lại, dùng từ miệng, thiếu dấu câu hoặc diễn đạt chưa rõ ràng.
+- Phân tích và trích xuất các thông tin cốt lõi về sản phẩm: tên sản phẩm, chất liệu, màu sắc, tính năng, lợi ích, đối tượng sử dụng, v.v.
+- Viết lại thành một mô tả sản phẩm hoàn chỉnh, trôi chảy và chuyên nghiệp theo đúng phong cách yêu cầu.
+
+Quy tắc bắt buộc:
+1. KHÔNG được bịa thêm thông tin không có trong đầu vào.
+2. Bỏ qua hoàn toàn các từ miệng, tiếng ừm/à, câu lặp lại, và lỗi nói.
+3. Chỉ trả về **nội dung mô tả sản phẩm** dưới dạng văn xuôi. Không giải thích, không dẫn nhập, không dấu ngoặc kép.
+4. Độ dài lý tưởng: 3–5 câu súc tích nhưng đủ thuyết phục."""
+
+    user_prompt = (
+        f"""## Đầu vào từ giọng nói người dùng:
+\"\"\"
+{request.product_description}
+\"\"\"
+
+## Phong cách viết yêu cầu: {request.style}
+## Đặc tả phong cách: {style_context}
+
+## Hướng dẫn:
+Bước 1 – Đọc kỹ đoạn giọng nói trên và xác định những thông tin quan trọng về sản phẩm (ví dụ: tên, màu sắc, chất liệu, công dụng, điểm nổi bật).
+Bước 2 – Dùng các thông tin đó để viết một mô tả sản phẩm hoàn chỉnh theo phong cách \'{request.style}\' ({style_context}).
+
+Kết quả (chỉ trả về mô tả sản phẩm, không kèm tiêu đề hay giải thích):"""
+    )
+
     messages = [
         {
             "role": "system",
-            "content": "Bạn là một chuyên gia Copywriter. Nhiệm vụ của bạn là viết lại mô tả sản phẩm dựa trên phong cách được yêu cầu."
+            "content": system_prompt
         },
         {
             "role": "user",
-            "content": (
-                f"Thông tin sản phẩm gốc: '{request.product_description}'\n"
-                f"Phong cách yêu cầu: '{request.style}'\n"
-                f"Đặc tả phong cách này: {style_context}\n\n"
-                f"Yêu cầu: Hãy viết lại mô tả sản phẩm trên theo đúng phong cách đã chọn. "
-                f"Chỉ trả về nội dung văn bản kết quả, không bao gồm lời dẫn hay dấu ngoặc kép."
-            )
+            "content": user_prompt
         }
     ]
 
@@ -162,8 +188,8 @@ async def generate_description(request: GenRequest):
         response = await client.chat.completions.create(
             model=AI_MODEL,
             messages=messages,
-            temperature=0.7,
-            max_tokens=500
+            temperature=0.75,
+            max_tokens=600
         )
 
         generated_text = response.choices[0].message.content.strip()
@@ -181,40 +207,31 @@ async def generate_description(request: GenRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- KHỞI TẠO MODEL STT (Load 1 lần khi chạy server) ---
-print("Đang tải model PhoWhisper... Vui lòng đợi...")
-stt_pipeline = pipeline("automatic-speech-recognition", model="vinai/PhoWhisper-tiny")
-print("Tải model thành công!")
-
-
 @app.post("/stt")
 async def speech_to_text(file: UploadFile = File(...)):
-    # 1. Kiểm tra định dạng file (hỗ trợ .wav, .mp3, .flac, .ogg)
-    allowed_extensions = ["wav", "mp3", "flac", "ogg"]
+    # 1. Kiểm tra định dạng file
+    allowed_extensions = ["wav", "mp3", "flac", "ogg", "m4a", "webm", "mp4", "mpeg", "mpga"]
     file_ext = file.filename.split(".")[-1].lower()
 
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=400,
-                            detail="Định dạng file không được hỗ trợ. Chỉ hỗ trợ .wav, .mp3, .flac, .ogg")
+                            detail=f"Định dạng file không được hỗ trợ. Chỉ hỗ trợ: {', '.join(allowed_extensions)}")
 
-    # 2. Lưu file audio tạm thời xuống ổ đĩa để đưa vào model
+    # 2. Lưu file audio tạm thời
     temp_file_path = f"temp_{file.filename}"
     try:
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 3. Tích hợp model PhoWhisper tại đây
+        # 3. Gọi PhoWhisper để nhận dạng giọng nói
         result = stt_pipeline(temp_file_path)
-        generated_text = result["text"]
 
-        # 4. Xóa file tạm sau khi xử lý xong
+        # 4. Xóa file tạm
         os.remove(temp_file_path)
 
-        # Trả về response đúng định dạng
-        return {"data": generated_text}
+        return {"data": result["text"]}
 
     except Exception as e:
-        # Nhớ xóa file tạm nếu có lỗi xảy ra
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
         print(f"STT Error: {e}")

@@ -77,9 +77,9 @@ def init_db():
         default_data = [
             ("văn minh", "Phong cách lịch sự, trang trọng, sử dụng từ ngữ chuẩn mực"),
             ("văn hoá người tày", "Kết hợp yếu tố văn hóa dân tộc Tày, sử dụng hình ảnh và từ ngữ đặc trưng"),
-            ("tan", "Phong cách cá nhân hóa của người dùng"),
             ("chuyên nghiệp", "Ngôn ngữ nghiệp vụ, rõ ràng, tập trung vào thông số kỹ thuật"),
-            ("thân thiện", "Giọng điệu gần gũi, ấm áp, dễ tiếp cận với khách hàng")
+            ("thân thiện", "Giọng điệu gần gũi, ấm áp, dễ tiếp cận với khách hàng"),
+            ("funny","Giọng văn trẻ trung, vui tươi, cách diễn đạt mới lạ")
         ]
         cursor.executemany('INSERT INTO styles (name, description) VALUES (?, ?)', default_data)
         conn.commit()
